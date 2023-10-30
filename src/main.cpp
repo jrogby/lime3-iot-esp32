@@ -21,12 +21,13 @@ const uint32_t BLE_PASSWORD = 123456789;
 
 
 // Set pins
-#define RXD2 16           // Serial2, To where? Display?
-//const int SERIAL2_RX = 16;
-#define TXD2 17           // Serial2, ..
-const int LOCK_PIN = 14;  // Existing lock or DIY?
-#define BUZZZER_PIN 12    // Connect a buzzer to this pin
-#define SHOCK_PIN 13      // Existing hw or DIY?
+#define RXD2        16        // Serial2 lime-display
+#define TXD2        17        // Serial2 lime-display
+#define TX_CTRL_PIN 27        // Serial lime-controller
+#define RX_CTRL_PIN 26        // Serial lime-controller
+const int LOCK_PIN = 15;      // Existing lock or DIY?
+#define BUZZZER_PIN 12        // Connect a buzzer to this pin
+#define SHOCK_PIN 15          // Existing hw or DIY?
 
 
 // Controller Codes
@@ -37,6 +38,7 @@ byte offEscByte[9] =        { 0x46, 0x43, 0x16, 0x61, 0x00, 0x01, 0xF0, 0xE2, 0x
 byte lightOnEscByte[9] =    { 0x46, 0x43, 0x16, 0x12, 0x00, 0x01, 0xF1, 0x2B, 0x26 };
 byte lightOffEscByte[9] =   { 0x46, 0x43, 0x16, 0x12, 0x00, 0x01, 0xF0, 0x3B, 0x07 };
 byte lightBlinkEscByte[9] = { 0x46, 0x43, 0x16, 0x13, 0x00, 0x01, 0x06, 0xC2, 0x6A };
+byte turnOffDisplayLed[18] ={ 0x4C, 0x42, 0x44, 0x43, 0x50, 0x01, 0x10, 0x1B, 0x00, 0x08, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
 }
 
 // Command codes from ESP32 to the ESC (Controller) ... same as above..
@@ -51,19 +53,30 @@ byte lightBlinkEscByte[9] = { 0x46, 0x43, 0x16, 0x13, 0x00, 0x01, 0x06, 0xC2, 0x
 
 // Display Status Codes
 namespace DisplayStatus {
-  const String SCAN               = "21";
-  const String ERROR              = "22";
-  const String PAUSED             = "23";
-  const String LOCKED             = "24";
-  const String DONE               = "25";
-  const String CHARGING           = "26";
-  const String DRIVING            = "31";
-  const String DRIVING_LOW_BAT    = "41";
-  const String DRIVING_ALERT      = "42";
-  const String DRIVING_NO_PARKING = "43";
-  const String DRIVING_NO_RIDING  = "44";
-  const String DRIVING_MAX_SPEED  = "45";
-  const String UPGRADING          = "51";
+
+  const String SCAN               = "21"; // [BAT%] "SCAN TO RIDE" (big text)
+  const String ERROR              = "22"; // [BAT%] "UNAVAILABLE" /w/BAT
+  const String PAUSED             = "23"; // [BAT%] "PAUSED" w/BAT
+  const String LOCKED             = "24"; // [BAT%] "LOCKED" w/BAT ("00"?)
+  const String DONE               = "25"; // [BAT%] "DONE?"
+  const String CHARGING           = "26"; // [BAT%] "CHARGING" w/BAT charging..
+  const String NEW_SCAN_TO_RIDE   = "27"; // [BAT%] "SCAN TO RIDE" (small text+white circle)
+  const String NEW_CLEAR_A        = "28"; // [BAT%] Black screen (in combi, with 26/27 41-43 ..? )
+  
+  const String DRIVING            = "31"; // [BAT%] "x KMH"
+  
+  const String NEW_HIDE_BAT       = "40"; // []                   "x KMH" (when 21-27, 31,..?)
+  const String DRIVING_LOW_BAT    = "41"; // [BAT X-symbol]       "x KMH"
+  const String DRIVING_ALERT      = "42"; // [ALERT-symbol blink] "x KMH" (40 interupts the blinking)
+  const String DRIVING_NO_PARKING = "43"; // ["NO PARKING"]       "x KMH"
+  const String DRIVING_NO_RIDING  = "44"; // ["NO RIDING"]        "x KMH"
+  const String DRIVING_MAX_SPEED  = "45"; // ["MAX xx KMH"]       "x KMH"
+
+  const String NEW_UPGRADING      = "50"; // [x%]                 "UPGRADING" (Same as 51-5F)
+  const String UPGRADING          = "51"; // [x%]                 "UPGRADING"
+  
+  const String NEW_LIME_LOGO      = "60"; // Show big lime-logo
+  
 }
 
 // Status
@@ -76,12 +89,12 @@ byte isUnlocked = 0;
 byte controllerIsOn = 0;
 byte lightIsOn = 0;
 byte unlockForEver = 0;
-byte speed = 0;
+float speed = 0.f;
 byte alarmIsOn = 0;
 byte throttle = 1;
 byte battery = 0x00;
 byte isCharging = 0x00;
-String customDisplayStatus = "";
+String cust_disp_stat = "";
 
 
 namespace settings {
@@ -116,12 +129,14 @@ void unlock()         {tone(BUZZZER_PIN,400,100);delay(100);tone(BUZZZER_PIN,500
 void ready()          {tone(BUZZZER_PIN,300,100);delay(100);tone(BUZZZER_PIN,400,100);delay(100);tone(BUZZZER_PIN,500,100);delay(100);noTone(BUZZZER_PIN);}
 }
 
-void send_command(byte* cmd, size_t len) {
-  while(isSending); // wait
-  isSending = true;
-  Serial.write(cmd, len);
-  delay(100);
-  isSending = false;
+void send_command(const byte *cmd, size_t len) {
+  //while(isSending)
+    ;;// wait
+  //isSending = true;
+  ESP_LOGI("SENDING", "len=%i", len);
+  Serial1.write(cmd, len);
+  delay(500);
+  //isSending = false;
 }
 
 // void send_command(EscCmd c) {
@@ -140,13 +155,13 @@ void send_command(byte* cmd, size_t len) {
 /*** utilso.ino ***/
 void lockScooter() {
   isUnlocked = 0;
-  beep::lock();
+  //beep::lock();
 }
 
 void unlockScooter() {
   isUnlocked = 1;
   digitalWrite(LOCK_PIN, HIGH);
-  beep::unlock();
+  //beep::unlock();
 }
 
 void turnOnController() {
@@ -195,52 +210,73 @@ class MySecurity : public BLESecurityCallbacks {
 /*** controller.ino ***/
 // CHARACTERISTIC_UUID_MAIN "00c1acd4-f35b-4b5f-868d-36e5668d0929"
 class MainBLECallback : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pc) {
-    auto val = pc->getValue();
-    ESP_LOGD("MainBLECallback", "Write main %s (%i)", val.c_str(), sizeof(val.c_str()));
+  void onWrite(BLECharacteristic *c, esp_ble_gatts_cb_param_t* param) {
+    ESP_LOGI("MainBLECallbackS", "Proxy write");
+    onWrite(c);
+  }
+  void onWrite(BLECharacteristic *c) {
+    auto value = c->getValue();
+    auto val_len = c->getLength();
+    ESP_LOGI("MainBLECallback", "Write main %s sizeof(value)=%d val_len=%d", value.c_str(), sizeof(value), val_len);
 
-    if (val.length()>0) {
-      String cmd = "";
-      for(int i=0;i < val.length();i++){cmd = cmd + val[i];}
+    if(value.length() > 0) {
+      String cmd(value.c_str());
+      //char cmd[value.length() + 2];
+      //value.copy(cmd, value.length(), 0);
       
       // lock_scooter
-      if(cmd=="lock") {
+      if(cmd == "lock") {
         ESP_LOGI("MainBLECallback", "Lock scooter");
-        beep::lock(); unlockForEver = 0;
-        send_command(EscCmdCode::offEscByte, sizeof(EscCmdCode::offEscByte)); isUnlocked = 0;
-        send_command(EscCmdCode::lightOffEscByte, sizeof(EscCmdCode::lightOffEscByte)); lightIsOn = 0;
+        //beep::lock();
+        unlockForEver = 0;
+        
+        send_command(EscCmdCode::offEscByte, sizeof(EscCmdCode::offEscByte));
+        isUnlocked = 0;
+        
+        send_command(EscCmdCode::lightOffEscByte, sizeof(EscCmdCode::lightOffEscByte));
+        lightIsOn = 0;
       }
 
       // unlock_scooter
       if(cmd=="unlock") {
         ESP_LOGI("MainBLECallback", "Unlock scooter");
-        beep::unlock(); unlockForEver = 0;
+        //beep::unlock();
+        unlockForEver = 0;
+
         if(!controllerIsOn) {
           digitalWrite(LOCK_PIN, HIGH);
           delay(3000);
           controllerIsOn = 1;
           }
-        send_command(EscCmdCode::onEscByte, sizeof(EscCmdCode::onEscByte)); isUnlocked = 1;
-        send_command(EscCmdCode::lightOnEscByte, sizeof(EscCmdCode::lightOnEscByte)); lightIsOn = 1;
+        send_command(EscCmdCode::onEscByte, sizeof(EscCmdCode::onEscByte));
+        isUnlocked = 1;
+        
+        send_command(EscCmdCode::lightOnEscByte, sizeof(EscCmdCode::lightOnEscByte));
+        lightIsOn = 1;
       }
       
       // controller_on
       if(cmd=="on") {
         ESP_LOGI("MainBLECallback", "Controller on");
-        digitalWrite(LOCK_PIN, HIGH); controllerIsOn = 1;
+        digitalWrite(LOCK_PIN, HIGH);
+        controllerIsOn = 1;
       }
 
       // controller_off
       if(cmd=="off") {
         ESP_LOGI("MainBLECallback", "Controller off");
-        digitalWrite(LOCK_PIN, LOW); controllerIsOn = 0; isUnlocked = 1;
+        digitalWrite(LOCK_PIN, LOW);
+        controllerIsOn = 0;
+        isUnlocked = 1;
       }
 
       // unlock_scooter_forever
       if(cmd=="unlockforever") {
         ESP_LOGI("MainBLECallback", "Unlock Forever");
-        unlockForEver = 1; unlockScooter();
-        beep::unlock_forever();
+        unlockForEver = 1;
+        isUnlocked = 1;
+        unlockScooter();
+        //beep::unlock_forever();
       }
 
       // trigger_alarm
@@ -248,9 +284,10 @@ class MainBLECallback : public BLECharacteristicCallbacks {
         ESP_LOGI("MainBLECallback", "Alarm");
         send_command(EscCmdCode::lightBlinkEscByte, sizeof(EscCmdCode::lightBlinkEscByte));
         digitalWrite(LOCK_PIN, HIGH);
-        beep::alarm();
+        //beep::alarm();
         send_command(EscCmdCode::lightBlinkEscByte, sizeof(EscCmdCode::lightBlinkEscByte));
-        if(controllerIsOn == 0) digitalWrite(LOCK_PIN, LOW);
+        if(controllerIsOn == 0)
+          digitalWrite(LOCK_PIN, LOW);
       }
 
       // scooter_light_on
@@ -306,7 +343,9 @@ void turnOffDisplayLed() {
   delay(300);
 }
 
-void sendDisplayCommand(byte speed, byte battery, String status) {
+
+
+void send_display_cmd(byte speed, byte battery, String status) {
   
   // speed = (speed/50.0) * 500.0;
   String SPEED_HEX = String(speed, HEX);
@@ -321,6 +360,7 @@ void sendDisplayCommand(byte speed, byte battery, String status) {
   // Create hex command
   String input_str = "4C42444350011011000901" + status + "01" + BATT_HEX + "02" + SPEED_HEX + "0100";
   int input_len = input_str.length();
+  ESP_LOGD("DISPLAY", "input_str=%s", input_str.c_str());
 
   byte input_bytes[input_len/2]; // byte array to store the converted values
 
@@ -353,14 +393,18 @@ void read_controller() {
   if(now - read_controller_prev >= read_controller_interval) {
     read_controller_prev = now;
 
-    if (Serial.available() == 42) {
-      byte cmd[42];
-      Serial.readBytes(cmd, 42);
+    unsigned int bytes_to_read = 42;
+
+    uint16_t new_checksum;
+    uint16_t old_checksum;
+    if (Serial1.available() == bytes_to_read) {
+      byte cmd[bytes_to_read];
+      Serial1.readBytes(cmd, bytes_to_read);
       pDebugCharacteristic->setValue(cmd, sizeof(cmd));
       pDebugCharacteristic->notify();
 
-      uint16_t new_checksum = crc16(cmd, sizeof(cmd) - 2, 0x1021, 0x0000, 0x0000, false, false);
-      uint16_t old_checksum = (uint16_t(cmd[40]) << 8) | uint16_t(cmd[41]);  // get a pointer to the last two bytes of the command array and interpret them as a uint16_t
+      new_checksum = crc16(cmd, sizeof(cmd) - 2, 0x1021, 0x0000, 0x0000, false, false);
+      old_checksum = (uint16_t(cmd[40]) << 8) | uint16_t(cmd[41]);  // get a pointer to the last two bytes of the command array and interpret them as a uint16_t
 
       // Check if the command has the correct checksum
       if (old_checksum == new_checksum) {
@@ -371,22 +415,26 @@ void read_controller() {
         isUnlocked  = cmd[23] == 0xF1 ? 1 : 0;
         lightIsOn   = cmd[29] == 0x4D ? 1 : 0;
       }
-    } else {}
+    } else {
+      ESP_LOGE("CRC", "Checksum missmatch -> %s!=%s", String(old_checksum, HEX).c_str(), String(new_checksum, HEX).c_str());
+    }
 
-    while (Serial.available() > 0)
-      char t = Serial.read();
+    while (Serial1.available() > 0)
+      char t = Serial1.read();
   }
 }
-
+void inline send_display_cmd(String status) {
+  send_display_cmd(speed, battery, cust_disp_stat != "" ? cust_disp_stat : status);
+}
 
 //UARTTaskCode: send command to display every 300ms
 void command_display_update(void *pvParameters) {
   for (;;) {
-    if (isUnlocked == 1)        sendDisplayCommand(speed, battery, customDisplayStatus != "" ? customDisplayStatus : DisplayStatus::DRIVING);
+    if (isUnlocked)             send_display_cmd(DisplayStatus::DRIVING);
     else {
-      if(isCharging)            sendDisplayCommand(speed, battery, customDisplayStatus != "" ? customDisplayStatus : DisplayStatus::CHARGING);
-      else if(deviceConnected)  sendDisplayCommand(speed, battery, customDisplayStatus != "" ? customDisplayStatus : DisplayStatus::LOCKED);
-      else                      sendDisplayCommand(speed, battery, customDisplayStatus != "" ? customDisplayStatus : DisplayStatus::SCAN);
+      if(isCharging)            send_display_cmd(DisplayStatus::CHARGING);
+      else if(deviceConnected)  send_display_cmd(DisplayStatus::LOCKED);
+      else                      send_display_cmd(DisplayStatus::SCAN);
     }
     vTaskDelay(300 / portTICK_PERIOD_MS);
   }
@@ -420,13 +468,28 @@ class SettingsBLECallback : public BLECharacteristicCallbacks {
         break;
       
       case 0x03:
-        customDisplayStatus = data[1] == 0x00 ? "" : String(data[1], HEX); // misstyped 0
-        ESP_LOGI("SettingsBLECallback", "Set custom display status to %s.", customDisplayStatus.c_str());
+        cust_disp_stat = data[1] == 0x00 ? "" : String(data[1], HEX); // misstyped 0
+        ESP_LOGI("SettingsBLECallback", "Set custom display status to %s.", cust_disp_stat.c_str());
         break;
       
-      case 0x4:
-        ESP_LOGI("SettingsBLECallback", "Turn display off.");
+      case 0x04:
+        ESP_LOGI("SettingsBLECallback", " turnOffDisplayLed()");
         turnOffDisplayLed();
+        break;
+
+      case 0x14:
+        ESP_LOGI("SettingsBLECallback", "Command LED off.");
+        send_command(EscCmdCode::turnOffDisplayLed, sizeof(EscCmdCode::turnOffDisplayLed));
+        break;
+      
+      case 0x0a:
+        ESP_LOGI("SettingsBLECallback", "Set speed to 33 km/h.");
+        speed = 33;
+        break;
+      
+      case 0x0b:
+        ESP_LOGI("SettingsBLECallback", "Set battery to 100%.");
+        battery = 100;
         break;
     }
     
@@ -452,18 +515,21 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 /*** setup.ino ***/
 void setup() {
-  
-  /** TODO: Replace by using ReactESP */
-  xTaskCreatePinnedToCore(command_display_update, "UART Update Display", 5000, nullptr, 1, &UARTTask, 0);
 
-  pinMode(LOCK_PIN,OUTPUT); digitalWrite(LOCK_PIN,HIGH); controllerIsOn=1;
+  /** TODO: Replace by using ReactESP */
+  xTaskCreatePinnedToCore(command_display_update, "UART Update Display", 5000, nullptr, 1, &UARTTask, 1);
+
+  pinMode(LOCK_PIN,OUTPUT);
+  digitalWrite(LOCK_PIN,HIGH);
+  controllerIsOn=1;
 
   // Sleep wakeup on TouchPad3 (GPIO15)
   //touchSleepWakeUpEnable(T3,40);
   // Sleep wakeup to shock sensor
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_14,1);
+  //esp_sleep_enable_ext0_wakeup(GPIO_NUM_14,1);
 
-  Serial.begin(115200); // was 9600 for com to controller? or just console?
+  Serial.begin(115200); // was 9600 for com to controller? or just console? BOTH?
+  Serial1.begin(9600,   SERIAL_8N1, RX_CTRL_PIN, TX_CTRL_PIN);
   Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
   ESP_LOGI("BLE", "Device init");
@@ -529,37 +595,43 @@ void setup() {
 
 
 /*** loop.ino ***/
-unsigned long prevMillis = 0;
-const long linterval = 250;
+unsigned long loop_prev_ms = 0;
+const long loop_interval = 250;
 
 void loop() {
   // Go to deep sleep if more than 1 hour have passed
-  if((3600 -(millis()/1000)) <= 0) {digitalWrite(LOCK_PIN,LOW); controllerIsOn=0; esp_deep_sleep_start();}
+  // if((3600 -(millis()/1000)) <= 0) {
+  //   digitalWrite(LOCK_PIN,LOW);
+  //   controllerIsOn=0;
+  //   esp_deep_sleep_start();}
   // Sound alarm condition: if(digitalRead(SHOCK_PIN) == HIGH) alarmBeeb();
 
-  // Every ~250ms, when device is connected, set/update main & settings characteristics
-  unsigned long currMillis = millis();
-  if(currMillis - prevMillis >= linterval) {
-    prevMillis = currMillis;
-    if (deviceConnected) {
-      byte settings[] = {settings::max_speed,settings::alarm::delay,settings::alarm::reps};
-      pSettingsCharacteristic->setValue(settings, sizeof(settings));
+  byte settings[] = {settings::max_speed,settings::alarm::delay,settings::alarm::reps};
+  byte commands[] = {isUnlocked,unlockForEver,speed,battery,throttle,lightIsOn,controllerIsOn,isCharging,alarmIsOn};
 
-      byte commands[] = {isUnlocked,unlockForEver,speed,battery,throttle,lightIsOn,controllerIsOn,isCharging,alarmIsOn};
+  // Every ~250ms, when device is connected, set/update main & settings characteristics
+  unsigned long current_ms = millis();
+  if(current_ms-loop_prev_ms >= loop_interval) {
+    loop_prev_ms = current_ms;
+
+    if (deviceConnected) {
+      pSettingsCharacteristic->setValue(settings, sizeof(commands));
       pMainCharacteristic->setValue(commands, sizeof(commands));
-      
       pMainCharacteristic->notify();
     }
-  }
-
-  // Send heartbeat
-  if(controllerIsOn && !isSending)
-    send_command(EscCmdCode::hearthBeatEscByte, sizeof(EscCmdCode::hearthBeatEscByte));
+    if(controllerIsOn)
+      if(!isSending)
+        send_command(EscCmdCode::hearthBeatEscByte, sizeof(EscCmdCode::hearthBeatEscByte));
+  } 
   
   // When disconnecting
   if(!deviceConnected && oldDeviceConnected) {
     ESP_LOGI("BLE", "Device disconnected");
-    if(unlockForEver == 0) {lockScooter(); digitalWrite(LOCK_PIN, LOW); controllerIsOn = 0;}
+    if(unlockForEver == 0) {
+      lockScooter();
+      digitalWrite(LOCK_PIN, LOW);
+      controllerIsOn = 0;
+    }
     beep::disconnected();
     delay(500); // the bluetooth stack may need this
     
