@@ -23,7 +23,7 @@ const uint32_t BLE_PASSWORD = 123456789;
 // Set pins
 #define RXD2        16        // Serial2 lime-display
 #define TXD2        17        // Serial2 lime-display
-#define TX_CTRL_PIN 27        // Serial lime-controller
+#define TX_CTRL_PIN 32 //27        // Serial lime-controller
 #define RX_CTRL_PIN 26        // Serial lime-controller
 const int LOCK_PIN = 15;      // Existing lock or DIY?
 #define BUZZZER_PIN 12        // Connect a buzzer to this pin
@@ -32,13 +32,13 @@ const int LOCK_PIN = 15;      // Existing lock or DIY?
 
 // Controller Codes
 namespace EscCmdCode {
-byte hearthBeatEscByte[16] ={ 0x46, 0x43, 0x11, 0x01, 0x00, 0x08, 0x4C, 0x49, 0x4D, 0x45, 0x42, 0x49, 0x4B, 0x45, 0xBE, 0x8A };
-byte onEscByte[9] =         { 0x46, 0x43, 0x16, 0x61, 0x00, 0x01, 0xF1, 0xF2, 0x8F };
-byte offEscByte[9] =        { 0x46, 0x43, 0x16, 0x61, 0x00, 0x01, 0xF0, 0xE2, 0xAE };
-byte lightOnEscByte[9] =    { 0x46, 0x43, 0x16, 0x12, 0x00, 0x01, 0xF1, 0x2B, 0x26 };
-byte lightOffEscByte[9] =   { 0x46, 0x43, 0x16, 0x12, 0x00, 0x01, 0xF0, 0x3B, 0x07 };
-byte lightBlinkEscByte[9] = { 0x46, 0x43, 0x16, 0x13, 0x00, 0x01, 0x06, 0xC2, 0x6A };
-byte turnOffDisplayLed[18] ={ 0x4C, 0x42, 0x44, 0x43, 0x50, 0x01, 0x10, 0x1B, 0x00, 0x08, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
+byte hearthBeatEsc[16] =    { 0x46, 0x43, 0x11, 0x01, 0x00, 0x08, 0x4C, 0x49, 0x4D, 0x45, 0x42, 0x49, 0x4B, 0x45, 0xBE, 0x8A };
+byte onEsc[9] =             { 0x46, 0x43, 0x16, 0x61, 0x00, 0x01, 0xF1, 0xF2, 0x8F };
+byte offEsc[9] =            { 0x46, 0x43, 0x16, 0x61, 0x00, 0x01, 0xF0, 0xE2, 0xAE };
+byte front_light_on[9] =    { 0x46, 0x43, 0x16, 0x12, 0x00, 0x01, 0xF1, 0x2B, 0x26 };
+byte front_light_off[9] =   { 0x46, 0x43, 0x16, 0x12, 0x00, 0x01, 0xF0, 0x3B, 0x07 };
+byte lights_blink[9] =      { 0x46, 0x43, 0x16, 0x13, 0x00, 0x01, 0x06, 0xC2, 0x6A };
+byte display_off[19] =      { 0x4C, 0x42, 0x44, 0x43, 0x50, 0x01, 0x10, 0x1B, 0x00, 0x08, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
 }
 
 // Command codes from ESP32 to the ESC (Controller) ... same as above..
@@ -85,15 +85,15 @@ bool oldDeviceConnected = false; // set by BLE cb
 
 namespace app_state {}
 
-byte isUnlocked = 0;
-byte controllerIsOn = 0;
-byte lightIsOn = 0;
-byte unlockForEver = 0;
+byte unlocked = 0;
+byte is_controller_on = 0;
+byte front_light = 0;
+byte unlocked_forever = 0;
 float speed = 0.f;
-byte alarmIsOn = 0;
+byte is_alarm_on = 0;
 byte throttle = 1;
 byte battery = 0x00;
-byte isCharging = 0x00;
+byte charging = 0x00;
 String cust_disp_stat = "";
 
 
@@ -133,7 +133,8 @@ void send_command(const byte *cmd, size_t len) {
   //while(isSending)
     ;;// wait
   //isSending = true;
-  ESP_LOGI("SENDING", "len=%i", len);
+  if(len != 16)
+    ESP_LOGI("SENDING (heartbeat exckluded)", "len=%i", len);
   Serial1.write(cmd, len);
   delay(500);
   //isSending = false;
@@ -154,23 +155,23 @@ void send_command(const byte *cmd, size_t len) {
 
 /*** utilso.ino ***/
 void lockScooter() {
-  isUnlocked = 0;
+  unlocked = 0;
   //beep::lock();
 }
 
 void unlockScooter() {
-  isUnlocked = 1;
+  unlocked = 1;
   digitalWrite(LOCK_PIN, HIGH);
   //beep::unlock();
 }
 
 void turnOnController() {
-  controllerIsOn = 1;
+  is_controller_on = 1;
   digitalWrite(LOCK_PIN, HIGH);
 }
 
 void turnOffController() {
-  controllerIsOn = 0;
+  is_controller_on = 0;
   digitalWrite(LOCK_PIN, LOW);
 }
 
@@ -225,92 +226,95 @@ class MainBLECallback : public BLECharacteristicCallbacks {
       //value.copy(cmd, value.length(), 0);
       
       // lock_scooter
-      if(cmd == "lock") {
+      if(cmd=="lock"||cmd=="l") {
         ESP_LOGI("MainBLECallback", "Lock scooter");
         //beep::lock();
-        unlockForEver = 0;
+        unlocked_forever = 0;
         
-        send_command(EscCmdCode::offEscByte, sizeof(EscCmdCode::offEscByte));
-        isUnlocked = 0;
+        send_command(EscCmdCode::offEsc, sizeof(EscCmdCode::offEsc));
+        unlocked = 0;
         
-        send_command(EscCmdCode::lightOffEscByte, sizeof(EscCmdCode::lightOffEscByte));
-        lightIsOn = 0;
+        send_command(EscCmdCode::front_light_off, sizeof(EscCmdCode::front_light_off));
+        front_light = 0;
       }
 
       // unlock_scooter
-      if(cmd=="unlock") {
+      if(cmd=="unlock"||cmd=="ul") {
         ESP_LOGI("MainBLECallback", "Unlock scooter");
-        //beep::unlock();
-        unlockForEver = 0;
+        beep::unlock();
+        unlocked_forever = 0;
 
-        if(!controllerIsOn) {
+        if(!is_controller_on) {
           digitalWrite(LOCK_PIN, HIGH);
           delay(3000);
-          controllerIsOn = 1;
+          is_controller_on = 1;
           }
-        send_command(EscCmdCode::onEscByte, sizeof(EscCmdCode::onEscByte));
-        isUnlocked = 1;
+        send_command(EscCmdCode::onEsc, sizeof(EscCmdCode::onEsc));
+        unlocked = 1;
         
-        send_command(EscCmdCode::lightOnEscByte, sizeof(EscCmdCode::lightOnEscByte));
-        lightIsOn = 1;
+        send_command(EscCmdCode::front_light_on, sizeof(EscCmdCode::front_light_on));
+        front_light = 1;
       }
       
       // controller_on
-      if(cmd=="on") {
+      if(cmd=="on" || cmd=="con") {
         ESP_LOGI("MainBLECallback", "Controller on");
         digitalWrite(LOCK_PIN, HIGH);
-        controllerIsOn = 1;
+        is_controller_on = 1;
       }
 
       // controller_off
-      if(cmd=="off") {
+      if(cmd=="off" || cmd=="coff") {
         ESP_LOGI("MainBLECallback", "Controller off");
         digitalWrite(LOCK_PIN, LOW);
-        controllerIsOn = 0;
-        isUnlocked = 1;
+        is_controller_on = 0;
+        unlocked = 1;
       }
 
       // unlock_scooter_forever
-      if(cmd=="unlockforever") {
+      if(cmd=="unlocked_forever"||cmd=="ulfe") {
         ESP_LOGI("MainBLECallback", "Unlock Forever");
-        unlockForEver = 1;
-        isUnlocked = 1;
+        unlocked_forever = 1;
+        unlocked = 1;
         unlockScooter();
         //beep::unlock_forever();
       }
 
       // trigger_alarm
-      if(cmd == "alarm") {
+      if(cmd == "alarm"||cmd=="al") {
         ESP_LOGI("MainBLECallback", "Alarm");
-        send_command(EscCmdCode::lightBlinkEscByte, sizeof(EscCmdCode::lightBlinkEscByte));
+        String prev_cust_stat = cust_disp_stat;
+        cust_disp_stat = DisplayStatus::DRIVING_ALERT;
+        send_command(EscCmdCode::lights_blink, sizeof(EscCmdCode::lights_blink));
         digitalWrite(LOCK_PIN, HIGH);
-        //beep::alarm();
-        send_command(EscCmdCode::lightBlinkEscByte, sizeof(EscCmdCode::lightBlinkEscByte));
-        if(controllerIsOn == 0)
+        beep::alarm();
+        send_command(EscCmdCode::lights_blink, sizeof(EscCmdCode::lights_blink));
+        if(is_controller_on == 0)
           digitalWrite(LOCK_PIN, LOW);
+        cust_disp_stat = prev_cust_stat;
       }
 
       // scooter_light_on
-      if(cmd=="lighton") {
-        ESP_LOGI("MainBLECallback", "Lights on");
-        send_command(EscCmdCode::lightOnEscByte, sizeof(EscCmdCode::lightOnEscByte));
-        lightIsOn = 1;
+      if(cmd=="lighton"||cmd=="flon") {
+        ESP_LOGI("MainBLECallback", "Front light ON");
+        send_command(EscCmdCode::front_light_on, sizeof(EscCmdCode::front_light_on));
+        front_light = 1;
       }
 
       // scooter_light_off
-      if(cmd=="lightoff") {
-        ESP_LOGI("MainBLECallback", "Lights off");
-        send_command(EscCmdCode::lightOffEscByte, sizeof(EscCmdCode::lightOffEscByte));
-        lightIsOn = 0;
+      if(cmd=="lightoff"||cmd=="floff") {
+        ESP_LOGI("MainBLECallback", "Front light OFF");
+        send_command(EscCmdCode::front_light_off, sizeof(EscCmdCode::front_light_off));
+        front_light = 0;
       }
 
       // shutdown (was same.. more like sleep..)
       if(cmd=="shutdown" || cmd == "reboot") {
         ESP_LOGI("MainBLECallback", "shotdown/reboot");
         digitalWrite(LOCK_PIN, LOW);
-        controllerIsOn = 0;
-        isUnlocked = 0;
-        lightIsOn = 0;
+        is_controller_on = 0;
+        unlocked = 0;
+        front_light = 0;
         esp_deep_sleep_start();
       }
     }
@@ -333,13 +337,15 @@ const uint8_t residue = 0x00;
 }
 
 // Currently I only know how to turn off the LED
-void turnOffDisplayLed() {
+void display_off() {
   byte myByte[19] = { 0x4C, 0x42, 0x44, 0x43, 0x50, 0x01, 0x10, 0x1B, 0x00, 0x08, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
-  byte checksum = crc8(myByte, sizeof(myByte), crc::poly, crc::init, crc::xorout, crc::refin, crc::refout);
+                    //" 4C    42    44    43    50    01    10    11    00    09    01" + xx  +"01"  "02" + yy + "01    00";
+  uint8_t checksum = crc8(myByte, sizeof(myByte), crc::poly, crc::init, crc::xorout, crc::refin, crc::refout);
   myByte[18] = checksum;
-  delay(300);
-  for (int i = 0; i < sizeof(myByte); i += 1)
+  
+  for (int i = 0; i < sizeof(myByte); ++i)
     Serial2.write(myByte[i]);
+  
   delay(300);
 }
 
@@ -347,7 +353,7 @@ void turnOffDisplayLed() {
 
 void send_display_cmd(byte speed, byte battery, String status) {
   
-  // speed = (speed/50.0) * 500.0;
+  speed = (speed/50.0) * 500.0;
   String SPEED_HEX = String(speed, HEX);
   // Add leading zeros to speed if necessary
   while (SPEED_HEX.length() < 4)
@@ -408,15 +414,19 @@ void read_controller() {
 
       // Check if the command has the correct checksum
       if (old_checksum == new_checksum) {
-        speed       = (cmd[8] / 172.0) * settings::max_speed;
+        speed       = (cmd[8]/172.0) * settings::max_speed;
         battery     = cmd[19];
-        throttle    = cmd[28];
-        isCharging  = cmd[21];
-        isUnlocked  = cmd[23] == 0xF1 ? 1 : 0;
-        lightIsOn   = cmd[29] == 0x4D ? 1 : 0;
+        throttle    = cmd[28]; // probably two bytes?
+        charging    = cmd[21];
+        unlocked    = cmd[23] == 0xF1 ? 1 : 0; // works
+        // front_light = cmd[29] == 0x4D ? 1 : 0; // wrong...
+        front_light = cmd[29] == 0x54 ? 1 : 0; // more correct but looks like it maybe can be dimmed...?
+        ESP_LOGI("READ ESC", "speed=0x%s\t 0x%s, 0x%s, 0x%s", String(speed), String(cmd[8],HEX),String(cmd[9],HEX), String(cmd[10],HEX));
+        
+        ESP_LOGI("READ ESC", "battery=0x%s %s\tthrottle=0x%s\tunlocked=%s\tfront_light=%s %s", String(battery,HEX), String(battery, DEC),String(throttle,HEX), String(unlocked), String(front_light), String(cmd[29], HEX));
       }
     } else {
-      ESP_LOGE("CRC", "Checksum missmatch -> %s!=%s", String(old_checksum, HEX).c_str(), String(new_checksum, HEX).c_str());
+      ESP_LOGW("READ ESC", "Checksum missmatch!");
     }
 
     while (Serial1.available() > 0)
@@ -430,9 +440,9 @@ void inline send_display_cmd(String status) {
 //UARTTaskCode: send command to display every 300ms
 void command_display_update(void *pvParameters) {
   for (;;) {
-    if (isUnlocked)             send_display_cmd(DisplayStatus::DRIVING);
+    if (unlocked)             send_display_cmd(DisplayStatus::DRIVING);
     else {
-      if(isCharging)            send_display_cmd(DisplayStatus::CHARGING);
+      if(charging)            send_display_cmd(DisplayStatus::CHARGING);
       else if(deviceConnected)  send_display_cmd(DisplayStatus::LOCKED);
       else                      send_display_cmd(DisplayStatus::SCAN);
     }
@@ -473,13 +483,13 @@ class SettingsBLECallback : public BLECharacteristicCallbacks {
         break;
       
       case 0x04:
-        ESP_LOGI("SettingsBLECallback", " turnOffDisplayLed()");
-        turnOffDisplayLed();
+        ESP_LOGI("SettingsBLECallback", " display_off()");
+        display_off();
         break;
 
       case 0x14:
         ESP_LOGI("SettingsBLECallback", "Command LED off.");
-        send_command(EscCmdCode::turnOffDisplayLed, sizeof(EscCmdCode::turnOffDisplayLed));
+        send_command(EscCmdCode::display_off, sizeof(EscCmdCode::display_off));
         break;
       
       case 0x0a:
@@ -517,11 +527,11 @@ class MyServerCallbacks : public BLEServerCallbacks {
 void setup() {
 
   /** TODO: Replace by using ReactESP */
-  xTaskCreatePinnedToCore(command_display_update, "UART Update Display", 5000, nullptr, 1, &UARTTask, 1);
+  xTaskCreatePinnedToCore(command_display_update, "UART Update Display", 5000, nullptr, 1, &UARTTask, 0);
 
   pinMode(LOCK_PIN,OUTPUT);
   digitalWrite(LOCK_PIN,HIGH);
-  controllerIsOn=1;
+  is_controller_on=1;
 
   // Sleep wakeup on TouchPad3 (GPIO15)
   //touchSleepWakeUpEnable(T3,40);
@@ -590,7 +600,8 @@ void setup() {
   esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
   
   ESP_LOGI("BLE", "Init complete"); beep::ready();
-  turnOffDisplayLed();
+  
+  display_off();
 }
 
 
@@ -602,12 +613,12 @@ void loop() {
   // Go to deep sleep if more than 1 hour have passed
   // if((3600 -(millis()/1000)) <= 0) {
   //   digitalWrite(LOCK_PIN,LOW);
-  //   controllerIsOn=0;
+  //   is_controller_on=0;
   //   esp_deep_sleep_start();}
   // Sound alarm condition: if(digitalRead(SHOCK_PIN) == HIGH) alarmBeeb();
 
   byte settings[] = {settings::max_speed,settings::alarm::delay,settings::alarm::reps};
-  byte commands[] = {isUnlocked,unlockForEver,speed,battery,throttle,lightIsOn,controllerIsOn,isCharging,alarmIsOn};
+  byte commands[] = {unlocked,unlocked_forever,speed,battery,throttle,front_light,is_controller_on,charging,is_alarm_on};
 
   // Every ~250ms, when device is connected, set/update main & settings characteristics
   unsigned long current_ms = millis();
@@ -619,18 +630,18 @@ void loop() {
       pMainCharacteristic->setValue(commands, sizeof(commands));
       pMainCharacteristic->notify();
     }
-    if(controllerIsOn)
+    if(is_controller_on)
       if(!isSending)
-        send_command(EscCmdCode::hearthBeatEscByte, sizeof(EscCmdCode::hearthBeatEscByte));
+        send_command(EscCmdCode::hearthBeatEsc, sizeof(EscCmdCode::hearthBeatEsc));
   } 
   
   // When disconnecting
   if(!deviceConnected && oldDeviceConnected) {
     ESP_LOGI("BLE", "Device disconnected");
-    if(unlockForEver == 0) {
+    if(unlocked_forever == 0) {
       lockScooter();
       digitalWrite(LOCK_PIN, LOW);
-      controllerIsOn = 0;
+      is_controller_on = 0;
     }
     beep::disconnected();
     delay(500); // the bluetooth stack may need this
@@ -643,11 +654,11 @@ void loop() {
   // When connecting
   if(deviceConnected && !oldDeviceConnected) {
     ESP_LOGI("BLE", "Device connected");
-    unlockForEver = 0;
+    unlocked_forever = 0;
     oldDeviceConnected = deviceConnected;
   }
   
   // When controller is on
-  if(controllerIsOn)
+  if(is_controller_on)
     read_controller();
 }
